@@ -43,20 +43,36 @@ type JoinResponse struct {
 	JoinResult     int
 	Message        string
 	GossipOverview GossipOverview
+	GossipState    GossipState
 }
 type HeartbeatRequest GossipOverview
 type HeartbeatResponse struct {
-	verState    int
-	gossipState GossipState
+	VerState    int
+	GossipState GossipState
 }
 
 var vclockID = []byte("gossiper")
 
-func (*GossipOverview) Heartbeat(request HeartbeatRequest,
+func (*Gossiper) Heartbeat(request HeartbeatRequest,
 	response *HeartbeatResponse) error {
 
-	response.verState = verSame
-	response.gossipState = gossiper.gossipState
+	response.VerState = verSame
+	response.GossipState = gossiper.gossipState
+	return nil
+}
+
+func (*Gossiper) JoinCluster(member *Member, response *JoinResponse) error {
+	gossiper.gossipState.version = *govclock.New()
+	fmt.Printf("joincluster member => %s:%s\n", member.Node.Hostname, member.Node.Port)
+	member.State = Joining
+	gossiper.gossipState.members = append(gossiper.gossipState.members, *member)
+
+	response.JoinResult = joinSuc
+	response.Message = "suc"
+	response.GossipOverview = gossiper.gossipOverview
+	response.GossipState = gossiper.gossipState
+
+	fmt.Println("joincluster:", len(gossiper.gossipOverview.versions))
 	return nil
 }
 
@@ -70,6 +86,7 @@ func (gossiper *Gossiper) join() error {
 	addr += ":"
 	addr += gossiper.seeds[0].Port
 
+	fmt.Printf("join addr => %s \n", addr)
 	client, err := jsonrpc.Dial("tcp", addr)
 	if err != nil {
 		return err
@@ -77,34 +94,82 @@ func (gossiper *Gossiper) join() error {
 
 	if client != nil {
 		// Synchronous call
-		var member Member
-		member.Node = gossiper.self
-		member.State = Joining
-
+		//var member Member
+		//member.Node = gossiper.self
+		//member.State = Joining
+		member := Member{gossiper.self, Joining}
+		fmt.Printf("join member => %s:%s\n", member.Node.Hostname, member.Node.Port)
 		var response JoinResponse
-		err = client.Call("Gossiper.JoinCluster", member, &response)
+		err = client.Call("Gossiper.JoinCluster", &member, &response)
 		if err != nil {
 			return err
 		} else {
 			fmt.Println("response: ", response.Message, len(response.GossipOverview.versions), response.JoinResult)
 			gossiper.gossipOverview = response.GossipOverview
+			gossiper.gossipState = response.GossipState
 
 		}
 	}
 	return nil
 }
 
-func (*Gossiper) JoinCluster(member Member, response *JoinResponse) error {
-	gossiper.gossipState.version = *govclock.New()
+func (*Gossiper) heartbeat() {
+	rand.Seed(time.Now().Unix())
+	for {
+		members := gossiper.gossipState.members
+		memberNum := len(members)
+		fmt.Println("memberNum:", memberNum)
+		if memberNum < 1 {
+			fmt.Println("memberNum error", memberNum)
+			<-time.After(5 * time.Second)
+			continue
+		}
 
-	member.State = Joining
-	gossiper.gossipState.members = append(gossiper.gossipState.members, member)
+		var index int = rand.Intn(memberNum)
+		var addr string
+		fmt.Printf("heartbeat:%d  index:%d\n", len(members), index)
 
-	response.JoinResult = joinSuc
-	response.Message = "suc"
-	response.GossipOverview = gossiper.gossipOverview
-	fmt.Println("joincluster:", len(gossiper.gossipOverview.versions))
-	return nil
+		node := members[index].Node
+
+		if node == gossiper.self {
+			fmt.Printf("node:%s, self:%s\n", node.Port, gossiper.self.Port)
+			<-time.After(5 * time.Second)
+			continue
+		}
+		addr += node.Hostname
+		addr += ":"
+		addr += node.Port
+
+		fmt.Printf("heartbeat addr => %s\n", addr)
+		client, err := jsonrpc.Dial("tcp", addr)
+		if err != nil {
+			fmt.Println("dial error", err)
+			<-time.After(5 * time.Second)
+			continue
+		}
+
+		if client != nil {
+			// Synchronous call
+
+			var request HeartbeatRequest
+
+			request = HeartbeatRequest(gossiper.gossipOverview)
+
+			var response HeartbeatResponse
+			err = client.Call("Gossiper.Heartbeat", request, &response)
+			if err != nil {
+				fmt.Println("call heartbeat error", err)
+				<-time.After(5 * time.Second)
+				continue
+			} else {
+				fmt.Println("heartbeat response: ", response.VerState, len(response.GossipState.members))
+
+			}
+		}
+
+		<-time.After(5 * time.Second)
+	}
+
 }
 
 func (*Gossiper) initialize() error {
@@ -117,6 +182,12 @@ func (*Gossiper) initialize() error {
 	if gossiper.isSeed {
 		gossiper.gossipOverview.versions = make(map[Node]govclock.VClock)
 		gossiper.gossipOverview.versions[gossiper.self] = version
+
+		var member Member
+		member.State = Up
+		member.Node = gossiper.self
+
+		gossiper.gossipState.members = append(gossiper.gossipState.members, member)
 		fmt.Println("versions len:", len(gossiper.gossipOverview.versions))
 
 	}
@@ -124,22 +195,6 @@ func (*Gossiper) initialize() error {
 }
 
 var gossiper Gossiper
-
-func (*Gossiper) heartbeat() {
-	rand.Seed(time.Now().Unix())
-	for {
-		versionLen := len(gossiper.gossipOverview.versions)
-		
-		if versionLen < 1 {
-			fmt.Println("version len error", versionLen)
-		}
-		var index int = rand.intn(versionLen - 1)
-		
-		fmt.Println("heartbeat:", len(gossiper.gossipOverview.versions))
-		<-time.After(5 * time.Second)
-	}
-
-}
 
 func Start(self Node, seeds NodeSlice) {
 	gossiper = *new(Gossiper)

@@ -15,7 +15,7 @@ const (
 )
 
 type Member struct {
-	Node
+	Node  Node
 	State int
 }
 
