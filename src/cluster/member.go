@@ -18,3 +18,15 @@ type Member struct {
 	Node
 	State int
 }
+
+type NodeSlice []Node
+
+func (nodes NodeSlice) Contain(value Node) int {
+	for p, v := range nodes {
+		if v.Hostname == value.Hostname &&
+			v.Port == value.Port {
+			return p
+		}
+	}
+	return -1
+}
