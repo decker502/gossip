@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"govclock"
+	"math/rand"
 	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
@@ -93,21 +94,6 @@ func (gossiper *Gossiper) join() error {
 	return nil
 }
 
-func (*Gossiper) initialize() error {
-	version := *govclock.New()
-	var when uint64 = uint64(time.Now().Unix())
-	version.Update(vclockID, when)
-
-	gossiper.gossipState.version = version
-
-	if gossiper.isSeed {
-		gossiper.gossipOverview.versions[gossiper.self] = version
-		fmt.Println("versions len:", len(gossiper.gossipOverview.versions))
-
-	}
-	return nil
-}
-
 func (*Gossiper) JoinCluster(member Member, response *JoinResponse) error {
 	gossiper.gossipState.version = *govclock.New()
 
@@ -117,14 +103,38 @@ func (*Gossiper) JoinCluster(member Member, response *JoinResponse) error {
 	response.JoinResult = joinSuc
 	response.Message = "suc"
 	response.GossipOverview = gossiper.gossipOverview
+	fmt.Println("joincluster:", len(gossiper.gossipOverview.versions))
+	return nil
+}
+
+func (*Gossiper) initialize() error {
+	version := *govclock.New()
+	var when uint64 = uint64(time.Now().Unix())
+	version.Update(vclockID, when)
+
+	gossiper.gossipState.version = version
+
+	if gossiper.isSeed {
+		gossiper.gossipOverview.versions = make(map[Node]govclock.VClock)
+		gossiper.gossipOverview.versions[gossiper.self] = version
+		fmt.Println("versions len:", len(gossiper.gossipOverview.versions))
+
+	}
 	return nil
 }
 
 var gossiper Gossiper
 
 func (*Gossiper) heartbeat() {
-
+	rand.Seed(time.Now().Unix())
 	for {
+		versionLen := len(gossiper.gossipOverview.versions)
+		
+		if versionLen < 1 {
+			fmt.Println("version len error", versionLen)
+		}
+		var index int = rand.intn(versionLen - 1)
+		
 		fmt.Println("heartbeat:", len(gossiper.gossipOverview.versions))
 		<-time.After(5 * time.Second)
 	}
@@ -135,11 +145,6 @@ func Start(self Node, seeds NodeSlice) {
 	gossiper = *new(Gossiper)
 	gossiper.self = self
 	gossiper.seeds = seeds
-	err := gossiper.initialize()
-	if err != nil {
-		fmt.Println("gossipState init fail", err)
-		return
-	}
 
 	fmt.Println("self:", self.Hostname, self.Port)
 	pos := seeds.Contain(self)
@@ -153,6 +158,12 @@ func Start(self Node, seeds NodeSlice) {
 	} else {
 		fmt.Println("seed")
 		gossiper.isSeed = true
+	}
+
+	err := gossiper.initialize()
+	if err != nil {
+		fmt.Println("gossipState init fail", err)
+		return
 	}
 
 	fmt.Println("gossiper start finished")
